@@ -56,9 +56,10 @@ Select an option:
   4) Clear all custom resolutions
   5) Apply all resolutions now
   6) Restore Wine to stock backup
+  7) Install / Remove auto-apply launch hook
   0) Exit
 
-Your choice [0-6]: 
+Your choice [0-7]: 
 ```
 
 ### Command-Line Interface (CLI)
@@ -67,7 +68,7 @@ Your choice [0-6]:
   ```bash
   osu-res add 1350 1080 -d "5:4 Full HD Stretched"
   osu-res add 1440 1080 -d "4:3 Full HD Stretched"
-  osu-res add 1100 720  -d "1100x720 Stretched"
+  osu-res add 1100 768  -d "1100x768 Stretched"
   ```
 
 * **List configured resolutions & detected display:**
@@ -85,9 +86,16 @@ Your choice [0-6]:
   osu-res clear
   ```
 
-* **Apply all resolutions (auto-hook):**
+* **Apply all resolutions (auto-sync):**
   ```bash
   osu-res apply
+  ```
+
+* **Manage osu-winello launch hook:**
+  ```bash
+  osu-res hook status
+  osu-res hook install
+  osu-res hook remove
   ```
 
 * **Restore Wine to stock backup:**

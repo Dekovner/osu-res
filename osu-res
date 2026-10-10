@@ -276,12 +276,88 @@ def cmd_clear():
     print(f"{GREEN}[OK]{RESET} All custom resolutions cleared.")
     apply_modes(verbose=True)
 
+def get_hook_status():
+    """Check if osu-winello auto-apply launch hook is installed."""
+    osuconfig_dir = os.path.expanduser("~/.local/share/osuconfig")
+    configs_dir = os.path.join(osuconfig_dir, "configs")
+    candidates = [
+        os.path.join(configs_dir, "custom_resolutions.cfg"),
+        os.path.join(configs_dir, "osu_res.cfg"),
+    ]
+    for c in candidates:
+        if os.path.isfile(c):
+            try:
+                with open(c, "r") as f:
+                    if "osu-res apply" in f.read():
+                        return True, c
+            except Exception:
+                pass
+    return False, os.path.join(configs_dir, "custom_resolutions.cfg")
+
+def cmd_hook_install():
+    """Install auto-apply launch hook for osu-winello."""
+    osuconfig_dir = os.path.expanduser("~/.local/share/osuconfig")
+    configs_dir = os.path.join(osuconfig_dir, "configs")
+    hook_file = os.path.join(configs_dir, "custom_resolutions.cfg")
+    try:
+        os.makedirs(configs_dir, exist_ok=True)
+        with open(hook_file, "w") as f:
+            f.write("# Auto-apply custom resolutions to Wine and XRandR on osu! launch\n")
+            f.write("osu-res apply >/dev/null 2>&1\n")
+        print(f"{GREEN}[OK]{RESET} osu-winello launch hook installed at: {BOLD}{hook_file}{RESET}")
+        print(f"     Custom resolutions will now automatically apply whenever osu! starts.")
+    except Exception as e:
+        print(f"{RED}[ERROR]{RESET} Failed to install launch hook: {e}")
+
+def cmd_hook_remove():
+    """Remove auto-apply launch hook."""
+    osuconfig_dir = os.path.expanduser("~/.local/share/osuconfig")
+    configs_dir = os.path.join(osuconfig_dir, "configs")
+    candidates = [
+        os.path.join(configs_dir, "custom_resolutions.cfg"),
+        os.path.join(configs_dir, "osu_res.cfg"),
+    ]
+    removed = False
+    for c in candidates:
+        if os.path.isfile(c):
+            try:
+                with open(c, "r") as f:
+                    content = f.read()
+                if "osu-res apply" in content:
+                    os.remove(c)
+                    removed = True
+                    print(f"{GREEN}[OK]{RESET} Removed launch hook: {c}")
+            except Exception as e:
+                print(f"{RED}[ERROR]{RESET} Error removing {c}: {e}")
+    if not removed:
+        print(f"{YELLOW}[INFO]{RESET} No osu-winello launch hook found to remove.")
+
+def check_and_prompt_hook():
+    """Check if launch hook is installed on interactive startup, prompt if missing."""
+    is_installed, hook_path = get_hook_status()
+    if is_installed:
+        return
+
+    osuconfig_dir = os.path.expanduser("~/.local/share/osuconfig")
+    if os.path.exists(osuconfig_dir):
+        print(f"\n{YELLOW}[NOTICE]{RESET} osu-winello detected, but the auto-apply launch hook is NOT installed.")
+        print(f"        Without this hook, custom resolutions won't apply automatically on game launch.")
+        try:
+            choice = input(f"{CYAN}Install auto-launch hook now? [Y/n]: {RESET}").strip().lower()
+            if choice in ("", "y", "yes"):
+                cmd_hook_install()
+        except (KeyboardInterrupt, EOFError):
+            print()
+
 def cmd_list():
     print_banner()
     mon = detect_monitor()
     so_path = find_win32u()
+    hook_installed, hook_path = get_hook_status()
+    hook_str = f"{GREEN}Active{RESET} ({hook_path})" if hook_installed else f"{YELLOW}Not installed{RESET}"
     print(f"{BLUE}• Display:{RESET} {BOLD}{mon['name']}{RESET} (Native: {mon['width']}x{mon['height']} @ {mon['rate']}Hz)")
     print(f"{BLUE}• Wine Library:{RESET} {so_path or 'Not found'}")
+    print(f"{BLUE}• Launch Hook:{RESET} {hook_str}")
     modes = load_config()
     if not modes:
         print(f"\n{YELLOW}No custom resolutions configured.{RESET}")
@@ -310,7 +386,10 @@ def cmd_restore():
 
 def interactive_menu():
     print_banner()
+    check_and_prompt_hook()
     while True:
+        hook_installed, _ = get_hook_status()
+        hook_label = "Remove launch hook" if hook_installed else "Install auto-apply launch hook"
         print(f"\n{BOLD}Select an option:{RESET}")
         print("  1) List custom resolutions")
         print("  2) Add custom resolution (Width x Height)")
@@ -318,8 +397,9 @@ def interactive_menu():
         print("  4) Clear all custom resolutions")
         print("  5) Apply all resolutions now")
         print("  6) Restore Wine to stock backup")
+        print(f"  7) {hook_label}")
         print("  0) Exit")
-        choice = input(f"\n{CYAN}Your choice [0-6]: {RESET}").strip()
+        choice = input(f"\n{CYAN}Your choice [0-7]: {RESET}").strip()
 
         if choice == "1":
             cmd_list()
@@ -348,6 +428,13 @@ def interactive_menu():
             apply_modes(verbose=True)
         elif choice == "6":
             cmd_restore()
+        elif choice == "7":
+            if hook_installed:
+                confirm = input("Remove auto-apply launch hook? [y/N]: ").strip().lower()
+                if confirm in ("y", "yes"):
+                    cmd_hook_remove()
+            else:
+                cmd_hook_install()
         elif choice in ("0", "q", "exit"):
             print(f"\n{GREEN}{BOLD}See you next time!{RESET}\n")
             break
@@ -381,6 +468,10 @@ def main():
     # restore
     subparsers.add_parser("restore", help="Restore original unmodified win32u.so from backup")
 
+    # hook
+    p_hook = subparsers.add_parser("hook", help="Manage osu-winello auto-apply launch hook")
+    p_hook.add_argument("action", choices=["install", "remove", "status"], default="status", nargs="?", help="Hook action (install, remove, status)")
+
     args = parser.parse_args()
 
     if args.command == "add":
@@ -404,6 +495,18 @@ def main():
         apply_modes(verbose=False)
     elif args.command == "restore":
         cmd_restore()
+    elif args.command == "hook":
+        if args.action == "install":
+            cmd_hook_install()
+        elif args.action == "remove":
+            cmd_hook_remove()
+        else:
+            installed, path = get_hook_status()
+            if installed:
+                print(f"{GREEN}[OK]{RESET} osu-winello launch hook is active: {BOLD}{path}{RESET}")
+            else:
+                print(f"{YELLOW}[NOTICE]{RESET} osu-winello launch hook is not installed.")
+                print(f"Run 'osu-res hook install' or option 7 in the menu to install it.")
     else:
         interactive_menu()
 
