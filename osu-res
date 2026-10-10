@@ -145,10 +145,21 @@ def apply_modes(verbose=True):
     if verbose:
         print(f"{BLUE}[INFO]{RESET} Detected display: {BOLD}{mon['name']}{RESET} ({mon['width']}x{mon['height']} @ {mon['rate']}Hz)")
 
-    # 1. Add custom modes to XRandR / Xwayland
-    if modes:
-        try:
-            xrandr_out = subprocess.run(["xrandr"], capture_output=True, text=True).stdout
+    # 1. Synchronize custom modes with XRandR / Xwayland
+    try:
+        xrandr_out = subprocess.run(["xrandr"], capture_output=True, text=True).stdout
+        # Custom modes added by osu-res follow the pattern <W>x<H>_<rate>
+        existing_custom = re.findall(r"^\s+(\d+x\d+_\d+(?:\.\d+)?)\b", xrandr_out, re.MULTILINE)
+        desired_names = {f"{m['width']}x{m['height']}_{mon['rate']}" for m in modes}
+
+        # Remove custom modes from XRandR that are no longer configured
+        for old_mode in existing_custom:
+            if old_mode not in desired_names:
+                subprocess.run(["xrandr", "--delmode", mon["name"], old_mode], capture_output=True)
+                subprocess.run(["xrandr", "--rmmode", old_mode], capture_output=True)
+
+        # Add newly configured modes
+        if modes:
             for m in modes:
                 w, h = m["width"], m["height"]
                 rate = mon["rate"]
@@ -168,8 +179,8 @@ def apply_modes(verbose=True):
                 cmd_add = f"xrandr --addmode {mon['name']} \"{name}\""
                 subprocess.run(cmd_new, shell=True, capture_output=True)
                 subprocess.run(cmd_add, shell=True, capture_output=True)
-        except Exception:
-            pass
+    except Exception:
+        pass
 
     # 2. Patch Wine win32u.so static resolution table
     if so_path:
