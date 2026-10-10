@@ -113,15 +113,40 @@ Your choice [0-7]:
 
 ---
 
-## 🔄 Automatic Launcher Hook (osu-winello)
+## 🔄 Why the Launcher Hook is Needed (osu-winello)
 
-To ensure your custom resolutions are automatically available every time you start osu! (even after reboots or Wine updates), create `~/.local/share/osuconfig/configs/custom_resolutions.cfg`:
+When you run `osu-res add <w> <h>`, two things happen under the hood:
+1. **On disk:** It patches Wine's `win32u.so` static resolution table (this persists on disk).
+2. **In memory:** It registers a high-refresh-rate CVT modeline in your running **XRandR / Xwayland** display session.
 
-```bash
-osu-res apply >/dev/null 2>&1
-```
+Because of this, **your custom resolutions work immediately** inside osu! right after adding them—no reboot or hook required for your current session!
 
-`osu-wine` loads all `*.cfg` files before launching the game, keeping your custom resolutions always active.
+### So why is the hook needed?
+
+* **Display Server Volatility (After Reboots):**  
+  XRandR / Xwayland keeps dynamic modelines in volatile memory. Whenever you reboot your computer or log out of your desktop session, XRandR resets back to factory defaults.  
+  Without the hook, after a reboot your game may either fail to switch to the custom mode or fall back to 60Hz instead of your monitor's native high refresh rate (144Hz/180Hz/240Hz+), unless you manually run `osu-res apply` in a terminal every time.
+
+* **Wine Updates:**  
+  Whenever `osu-winello` (or your runner manager) updates Wine, it downloads a fresh `win32u.so`, overwriting previous patches.
+
+### The Solution: "Set and Forget" Auto-Hook
+
+The launch hook is a tiny non-blocking one-liner (`osu-res apply >/dev/null 2>&1`) placed inside `~/.local/share/osuconfig/configs/custom_resolutions.cfg`.
+
+Before `osu!.exe` boots up, `osu-wine` sources this config and executes `osu-res apply` in a fraction of a second:
+- Restores all your configured custom resolutions and refresh rates into XRandR automatically.
+- Automatically re-patches `win32u.so` if Wine was updated.
+- Completely seamless: you never need to touch the terminal again after setting up your resolutions.
+
+### How to Install the Hook:
+* **Interactive:** `osu-res` will automatically detect `osu-winello` and offer to install the hook on launch. You can also toggle it anytime via menu option **`7`**.
+* **CLI:**
+  ```bash
+  osu-res hook install    # Install the launch hook
+  osu-res hook status     # Check if the hook is active
+  osu-res hook remove     # Remove the hook
+  ```
 
 ---
 
