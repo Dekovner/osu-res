@@ -104,8 +104,8 @@ def detect_monitor():
         print(f"{YELLOW}[HINT]{RESET} Please ensure an active display is connected and running under X11/Xwayland.")
         sys.exit(1)
 
-    # Prioritize primary monitor, then highest refresh rate
-    best = sorted(monitors, key=lambda m: (m["primary"], m["rate"]), reverse=True)[0]
+    # Prioritize highest refresh rate monitor, then primary
+    best = sorted(monitors, key=lambda m: (m["rate"], m["primary"]), reverse=True)[0]
     return best
 
 def find_win32u():
