@@ -52,12 +52,13 @@ osu-res
 Select an option:
   1) List custom resolutions
   2) Add custom resolution (Width x Height)
-  3) Remove resolution
-  4) Apply all resolutions now
-  5) Restore Wine to stock backup
+  3) Remove a resolution
+  4) Clear all custom resolutions
+  5) Apply all resolutions now
+  6) Restore Wine to stock backup
   0) Exit
 
-Your choice [0-5]: 
+Your choice [0-6]: 
 ```
 
 ### Command-Line Interface (CLI)
@@ -77,6 +78,11 @@ Your choice [0-5]:
 * **Remove a resolution:**
   ```bash
   osu-res remove 1350 1080
+  ```
+
+* **Clear all custom resolutions:**
+  ```bash
+  osu-res clear
   ```
 
 * **Apply all resolutions (auto-hook):**

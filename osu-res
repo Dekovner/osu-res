@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 osu-res: Universal Custom Resolution Manager for osu! (Wine on Linux)
-Injects arbitrary custom resolutions directly into Wine (win32u) and XRandR / Xwayland,
+Injects user-specified custom resolutions directly into Wine (win32u) and XRandR / Xwayland,
 making them appear natively in the in-game resolution dropdown menu without gamescope or blur.
 """
 
@@ -18,22 +18,8 @@ import argparse
 CONFIG_DIR = os.path.expanduser("~/.config/osu-res")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "config.json")
 
-# Default preset modes
-DEFAULT_MODES = [
-    {"width": 1440, "height": 1080, "desc": "4:3 Full HD Stretched"},
-    {"width": 1350, "height": 1080, "desc": "5:4 Full HD Stretched"},
-    {"width": 1100, "height": 880,  "desc": "5:4 with 1100 width"},
-    {"width": 1100, "height": 720,  "desc": "1100x720 Stretched"},
-    {"width": 1100, "height": 700,  "desc": "1100x700"},
-    {"width": 1100, "height": 750,  "desc": "1100x750"},
-    {"width": 1100, "height": 768,  "desc": "1100x768"},
-    {"width": 1120, "height": 700,  "desc": "1120x700"},
-    {"width": 1152, "height": 720,  "desc": "16:10 Stretched"},
-    {"width": 1080, "height": 1080, "desc": "1:1 Square Stretched"},
-    {"width": 1536, "height": 1080, "desc": "1536x1080 Stretched"},
-    {"width": 1600, "height": 1080, "desc": "1600x1080 Stretched"},
-    {"width": 1728, "height": 1080, "desc": "16:10 Stretched"},
-]
+# Default modes: Empty by default so users choose only what they need
+DEFAULT_MODES = []
 
 # ANSI terminal formatting
 GREEN = "\033[1;32m"
@@ -132,33 +118,36 @@ def find_mode_table_offset(so_path):
 def apply_modes(verbose=True):
     mon = detect_monitor()
     so_path = find_win32u()
+    modes = load_config()
 
     if verbose:
         print(f"{BLUE}[INFO]{RESET} Detected display: {BOLD}{mon['name']}{RESET} ({mon['width']}x{mon['height']} @ {mon['rate']}Hz)")
 
     # 1. Add custom modes to XRandR / Xwayland
-    modes = load_config()
-    xrandr_out = subprocess.run(["xrandr"], capture_output=True, text=True).stdout
+    if modes:
+        try:
+            xrandr_out = subprocess.run(["xrandr"], capture_output=True, text=True).stdout
+            for m in modes:
+                w, h = m["width"], m["height"]
+                rate = mon["rate"]
+                name = f"{w}x{h}_{rate}"
+                if f" {w}x{h} " in xrandr_out or name in xrandr_out:
+                    continue
 
-    for m in modes:
-        w, h = m["width"], m["height"]
-        rate = mon["rate"]
-        name = f"{w}x{h}_{rate}"
-        if f" {w}x{h} " in xrandr_out or name in xrandr_out:
-            continue
+                htotal = int(w * 1.15)
+                vtotal = int(h * 1.05)
+                clock = round((htotal * vtotal * rate) / 1000000.0, 2)
+                hsync_start = int(w + (htotal - w) * 0.3)
+                hsync_end = int(w + (htotal - w) * 0.6)
+                vsync_start = int(h + 3)
+                vsync_end = int(h + 7)
 
-        htotal = int(w * 1.15)
-        vtotal = int(h * 1.05)
-        clock = round((htotal * vtotal * rate) / 1000000.0, 2)
-        hsync_start = int(w + (htotal - w) * 0.3)
-        hsync_end = int(w + (htotal - w) * 0.6)
-        vsync_start = int(h + 3)
-        vsync_end = int(h + 7)
-
-        cmd_new = f"xrandr --newmode \"{name}\" {clock} {w} {hsync_start} {hsync_end} {htotal} {h} {vsync_start} {vsync_end} {vtotal} -hsync +vsync"
-        cmd_add = f"xrandr --addmode {mon['name']} \"{name}\""
-        subprocess.run(cmd_new, shell=True, capture_output=True)
-        subprocess.run(cmd_add, shell=True, capture_output=True)
+                cmd_new = f"xrandr --newmode \"{name}\" {clock} {w} {hsync_start} {hsync_end} {htotal} {h} {vsync_start} {vsync_end} {vtotal} -hsync +vsync"
+                cmd_add = f"xrandr --addmode {mon['name']} \"{name}\""
+                subprocess.run(cmd_new, shell=True, capture_output=True)
+                subprocess.run(cmd_add, shell=True, capture_output=True)
+        except Exception:
+            pass
 
     # 2. Patch Wine win32u.so static resolution table
     if so_path:
@@ -173,21 +162,33 @@ def apply_modes(verbose=True):
         ref_file = bak_path if os.path.exists(bak_path) else so_path
         offset = find_mode_table_offset(ref_file)
         if offset != -1:
-            base_safe_modes = [
-                (640, 480), (800, 600), (1024, 768), (1280, 960),
-                (960, 540), (1280, 720), (1600, 900), (mon["width"], mon["height"])
-            ]
-            custom_pairs = [(m["width"], m["height"]) for m in modes]
-            final_modes = []
-            for pair in base_safe_modes:
-                if pair not in final_modes:
-                    final_modes.append(pair)
-            for pair in custom_pairs:
-                if pair not in final_modes:
-                    final_modes.append(pair)
+            # Read factory original 24 modes from backup
+            stock_modes = []
+            with open(ref_file, "rb") as f:
+                f.seek(offset)
+                for _ in range(24):
+                    w, h = struct.unpack("<II", f.read(8))
+                    stock_modes.append((w, h))
 
-            # Limit to 24 slots (Wine's standard table size)
-            final_modes = final_modes[:24]
+            if not modes:
+                # If no custom modes are configured, restore factory table
+                final_modes = list(stock_modes)
+            else:
+                # Find inactive slots (modes exceeding current monitor resolution, e.g. 2560x1440, 3840x1600 on 1080p)
+                inactive_indices = [i for i, (w, h) in enumerate(stock_modes) if w > mon["width"] or h > mon["height"]]
+                # Also include ultra-wide bar modes (e.g. 1920x800) if more slots needed
+                for i, (w, h) in enumerate(stock_modes):
+                    if (w, h) in [(1920, 800), (1440, 960)] and i not in inactive_indices:
+                        inactive_indices.append(i)
+
+                final_modes = list(stock_modes)
+                user_pairs = [(m["width"], m["height"]) for m in modes]
+
+                # Replace only inactive slots with user custom resolutions
+                for idx, user_pair in enumerate(user_pairs):
+                    if idx < len(inactive_indices):
+                        slot_idx = inactive_indices[idx]
+                        final_modes[slot_idx] = user_pair
 
             try:
                 packed = b"".join(struct.pack("<II", w, h) for w, h in final_modes)
@@ -198,7 +199,7 @@ def apply_modes(verbose=True):
                         f.seek(offset)
                         f.write(packed)
                         if verbose:
-                            print(f"{GREEN}[OK]{RESET} Wine display table ({os.path.basename(so_path)}) patched successfully!")
+                            print(f"{GREEN}[OK]{RESET} Wine display table ({os.path.basename(so_path)}) updated successfully!")
             except Exception as e:
                 if verbose:
                     print(f"{RED}[ERROR]{RESET} Failed writing to {so_path}: {e}")
@@ -207,7 +208,10 @@ def apply_modes(verbose=True):
                 print(f"{YELLOW}[WARN]{RESET} Display mode table signature not found in {so_path}.")
 
     if verbose:
-        print(f"{GREEN}[OK]{RESET} All resolutions applied! Launch osu! and check Options -> Screen Resolution.")
+        if modes:
+            print(f"{GREEN}[OK]{RESET} All custom resolutions applied! Launch osu! and check Options -> Screen Resolution.")
+        else:
+            print(f"{GREEN}[OK]{RESET} Stock Wine resolutions active (no custom modes configured).")
 
 def cmd_add(w, h, desc=None):
     modes = load_config()
@@ -234,14 +238,25 @@ def cmd_remove(w, h):
     else:
         print(f"{YELLOW}[WARN]{RESET} Resolution {w}x{h} not found in the list.")
 
+def cmd_clear():
+    save_config([])
+    print(f"{GREEN}[OK]{RESET} All custom resolutions cleared.")
+    apply_modes(verbose=True)
+
 def cmd_list():
     print_banner()
     mon = detect_monitor()
     so_path = find_win32u()
     print(f"{BLUE}• Display:{RESET} {BOLD}{mon['name']}{RESET} (Native: {mon['width']}x{mon['height']} @ {mon['rate']}Hz)")
     print(f"{BLUE}• Wine Library:{RESET} {so_path or 'Not found'}")
-    print(f"\n{BOLD}Configured Custom Resolutions:{RESET}")
     modes = load_config()
+    if not modes:
+        print(f"\n{YELLOW}No custom resolutions configured.{RESET}")
+        print("Add one using: osu-res add <width> <height> [-d \"description\"]")
+        print("Or run 'osu-res' for the interactive menu.\n")
+        return
+
+    print(f"\n{BOLD}Configured Custom Resolutions ({len(modes)}):{RESET}")
     for i, m in enumerate(modes, 1):
         ratio = round(m["width"] / m["height"], 2)
         print(f"  [{i:2d}] {BOLD}{m['width']:4d}x{m['height']:<4d}{RESET}  (aspect ratio ~{ratio})  - {m.get('desc', '')}")
@@ -255,6 +270,7 @@ def cmd_restore():
     bak_path = so_path + ".orig"
     if os.path.exists(bak_path):
         shutil.copyfile(bak_path, so_path)
+        save_config([])
         print(f"{GREEN}[OK]{RESET} Wine successfully restored from original backup ({bak_path})!")
     else:
         print(f"{YELLOW}[WARN]{RESET} Original backup {bak_path} not found.")
@@ -265,11 +281,12 @@ def interactive_menu():
         print(f"\n{BOLD}Select an option:{RESET}")
         print("  1) List custom resolutions")
         print("  2) Add custom resolution (Width x Height)")
-        print("  3) Remove resolution")
-        print("  4) Apply all resolutions now")
-        print("  5) Restore Wine to stock backup")
+        print("  3) Remove a resolution")
+        print("  4) Clear all custom resolutions")
+        print("  5) Apply all resolutions now")
+        print("  6) Restore Wine to stock backup")
         print("  0) Exit")
-        choice = input(f"\n{CYAN}Your choice [0-5]: {RESET}").strip()
+        choice = input(f"\n{CYAN}Your choice [0-6]: {RESET}").strip()
 
         if choice == "1":
             cmd_list()
@@ -291,8 +308,12 @@ def interactive_menu():
             except ValueError:
                 print(f"{RED}[ERROR]{RESET} Invalid numbers entered.")
         elif choice == "4":
-            apply_modes(verbose=True)
+            confirm = input("Clear all custom resolutions? [y/N]: ").strip().lower()
+            if confirm in ("y", "yes"):
+                cmd_clear()
         elif choice == "5":
+            apply_modes(verbose=True)
+        elif choice == "6":
             cmd_restore()
         elif choice in ("0", "q", "exit"):
             print(f"\n{GREEN}{BOLD}See you next time!{RESET}\n")
@@ -314,6 +335,9 @@ def main():
     p_rm = subparsers.add_parser("remove", help="Remove custom resolution")
     p_rm.add_argument("width", type=int, help="Width in pixels")
     p_rm.add_argument("height", type=int, help="Height in pixels")
+
+    # clear
+    subparsers.add_parser("clear", help="Clear all custom resolutions")
 
     # list
     subparsers.add_parser("list", help="List custom resolutions and display info")
@@ -339,6 +363,8 @@ def main():
                 print(f"{RED}[ERROR]{RESET} Invalid numbers entered.")
     elif args.command == "remove":
         cmd_remove(args.width, args.height)
+    elif args.command == "clear":
+        cmd_clear()
     elif args.command == "list":
         cmd_list()
     elif args.command == "apply":
